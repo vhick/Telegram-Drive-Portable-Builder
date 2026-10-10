@@ -5,8 +5,16 @@ $mainFile = Join-Path $SourceRoot 'app\src-tauri\src\main.rs'
 $updatesFile = Join-Path $SourceRoot 'app\src\hooks\useUpdateCheck.ts'
 $markerFile = Join-Path $SourceRoot '.telegramdrive-phase1-patch.json'
 
-$mainText = (Get-Content -LiteralPath $mainFile -Raw -Encoding UTF8).Replace("`r`n", "`n")
-$updateText = (Get-Content -LiteralPath $updatesFile -Raw -Encoding UTF8).Replace("`r`n", "`n")
+# GitHub Actions runs this script on Windows. A Git checkout and a PowerShell
+# here-string can use CRLF, while the upstream Rust/TypeScript files can use LF.
+# Normalize BOTH the source and the patch's expected text to avoid false
+# "upstream changed" failures caused by newline formatting alone.
+function Normalize-Eol([string]$Text) {
+  return $Text.Replace("`r`n", "`n").Replace("`r", "`n")
+}
+
+$mainText = Normalize-Eol (Get-Content -LiteralPath $mainFile -Raw -Encoding UTF8)
+$updateText = Normalize-Eol (Get-Content -LiteralPath $updatesFile -Raw -Encoding UTF8)
 
 $oldMain = @'
 fn main() {
@@ -74,10 +82,24 @@ $newInstall = @'
 $importsEnd = "import { INITIAL_UPDATE_CHECK_DELAY_MS, UPDATE_RECHECK_INTERVAL_MS } from '../services/updatePolicy';"
 $newImportsEnd = $importsEnd + "`n" + 'const PORTABLE_UPDATES_DISABLED = true; // TELEGRAMDRIVE_PORTABLE_UPDATER_V1'
 
-# Fail closed if upstream has changed since the inspection. Do not leave a half-patch.
-if (-not $mainText.Contains($oldMain)) { throw 'main.rs upstream changed; re-inspection required.' }
+# Normalize here-strings too. On Windows, PowerShell usually creates CRLF
+# here-strings; only normalizing main.rs would make a correct source look wrong.
+$oldMain = Normalize-Eol $oldMain
+$newMain = Normalize-Eol $newMain
+$newCheck = Normalize-Eol $newCheck
+$newInstall = Normalize-Eol $newInstall
+
+# Fail closed when semantic anchors actually differ; never emit an unpatched EXE.
+$mainOccurrences = ([regex]::Matches($mainText, [regex]::Escape($oldMain))).Count
+if ($mainOccurrences -ne 1) {
+  Write-Host "Expected exactly one known main() entrypoint, found $mainOccurrences." -ForegroundColor Red
+  Write-Host 'The comparison already ignores CRLF versus LF differences.' -ForegroundColor Yellow
+  Write-Host 'Matched revision is available in SOURCE-REVISION.txt from the last inspection.'
+  throw 'main.rs no longer matches the inspected entrypoint; a source inspection is required.'
+}
 foreach ($part in @($oldAuto, $oldCheck, $oldInstall, $importsEnd)) {
-  if (-not $updateText.Contains($part)) { throw "useUpdateCheck.ts upstream changed ($part); re-inspection required." }
+  $hits = ([regex]::Matches($updateText, [regex]::Escape($part))).Count
+  if ($hits -ne 1) { throw "Expected exactly one instance of useUpdateCheck.ts anchor (found $hits): $part" }
 }
 
 $mainText = $mainText.Replace($oldMain, $newMain)
