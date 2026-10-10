@@ -1,0 +1,160 @@
+name: Build Telegram Drive Portable (Phase 1)
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: Select the operation
+        required: true
+        default: filesystem-portable
+        type: choice
+        options:
+          - filesystem-portable
+          - inspect-source
+      upstream_repo:
+        description: Source repository (blank = your Telegram-Drive fork)
+        required: false
+        default: ""
+      upstream_ref:
+        description: Source branch/tag/commit
+        required: false
+        default: main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: telegram-drive-portable-phase1
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Telegram Drive Portable Phase 1
+    runs-on: windows-2022
+    timeout-minutes: 180
+    env:
+      CARGO_INCREMENTAL: '0'
+
+    steps:
+      - name: Checkout portable builder
+        uses: actions/checkout@v7
+
+      - name: Resolve clean fork
+        id: source
+        shell: pwsh
+        env:
+          SOURCE_INPUT: ${{ inputs.upstream_repo }}
+          REF_INPUT: ${{ inputs.upstream_ref }}
+          OWNER_NAME: ${{ github.repository_owner }}
+        run: |
+          $repo = $env:SOURCE_INPUT
+          if ([string]::IsNullOrWhiteSpace($repo)) { $repo = "$env:OWNER_NAME/Telegram-Drive" }
+          $ref = $env:REF_INPUT
+          if ([string]::IsNullOrWhiteSpace($ref)) { $ref = 'main' }
+          "repo=$repo" >> $env:GITHUB_OUTPUT
+          "ref=$ref" >> $env:GITHUB_OUTPUT
+          Write-Host "Source: $repo / $ref"
+
+      - name: Checkout clean Telegram Drive fork
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ steps.source.outputs.repo }}
+          ref: ${{ steps.source.outputs.ref }}
+          path: upstream
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Record source commit
+        id: revision
+        shell: pwsh
+        run: |
+          $sha = (git -C upstream rev-parse HEAD).Trim()
+          "sha=$sha" >> $env:GITHUB_OUTPUT
+          Write-Host "Upstream commit: $sha"
+
+      - name: Inspect upstream source
+        if: ${{ inputs.mode == 'inspect-source' }}
+        shell: pwsh
+        run: |
+          & .\scripts\Inspect-TelegramDrive-Source.ps1 `
+            -SourceRoot "$PWD\upstream" `
+            -OutputRoot "$PWD\artifact\TelegramDrive-Inspection"
+
+      - name: Upload inspection artifact
+        if: ${{ inputs.mode == 'inspect-source' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: TelegramDrive-Portability-Inspection-${{ steps.revision.outputs.sha }}
+          path: artifact/TelegramDrive-Inspection/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Setup Node 22
+        if: ${{ inputs.mode == 'filesystem-portable' }}
+        uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: upstream/app/package-lock.json
+
+      - name: Setup Rust
+        if: ${{ inputs.mode == 'filesystem-portable' }}
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust build outputs
+        if: ${{ inputs.mode == 'filesystem-portable' }}
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: upstream/app/src-tauri
+
+      - name: Install original Node dependencies
+        if: ${{ inputs.mode == 'filesystem-portable' }}
+        working-directory: upstream/app
+        shell: pwsh
+        run: npm ci
+
+      - name: Upgrade temporary checkout to compatible Tauri versions
+        if: ${{ inputs.mode == 'filesystem-portable' }}
+        shell: pwsh
+        run: |
+          & .\scripts\Upgrade-Tauri-Portable.ps1 -SourceRoot "$PWD\upstream"
+
+      - name: Apply filesystem-portable source patch
+        if: ${{ inputs.mode == 'filesystem-portable' }}
+        shell: pwsh
+        run: |
+          & .\scripts\Apply-Phase1-Patch.ps1 -SourceRoot "$PWD\upstream"
+
+      - name: Verify patch, CLI schema, and Rust versions
+        if: ${{ inputs.mode == 'filesystem-portable' }}
+        shell: pwsh
+        run: |
+          & .\scripts\Verify-Phase1-Patch.ps1 -SourceRoot "$PWD\upstream"
+
+      - name: Compile frontend and bare Windows EXE (no installer)
+        if: ${{ inputs.mode == 'filesystem-portable' }}
+        working-directory: upstream/app
+        shell: pwsh
+        env:
+          CI: 'true'
+        run: |
+          npx tauri build --no-bundle --config "$env:GITHUB_WORKSPACE\portable\tauri.portable.conf.json"
+          if ($LASTEXITCODE -ne 0) { throw "Tauri build failed: $LASTEXITCODE" }
+
+      - name: Assemble portable artifact
+        if: ${{ inputs.mode == 'filesystem-portable' }}
+        shell: pwsh
+        run: |
+          & .\scripts\Assemble-Portable.ps1 `
+            -SourceRoot "$PWD\upstream" `
+            -KitRoot "$PWD" `
+            -OutputRoot "$PWD\artifact\TelegramDrive-Portable"
+
+      - name: Upload Phase 1 portable artifact
+        if: ${{ inputs.mode == 'filesystem-portable' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: TelegramDrive-Phase1-Portable-Windows-x64-${{ steps.revision.outputs.sha }}
+          path: artifact/TelegramDrive-Portable/
+          if-no-files-found: error
+          retention-days: 30
