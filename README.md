@@ -1,30 +1,24 @@
-# Telegram Drive Portable — Source Inspection Edition
+# Telegram Drive – Phase 1 Filesystem Portable Builder
 
-This repository is for the **first inspection stage**, not the finished portable app.
+**Status:** Experimental. No compiled Windows binary is included in this repository. This builder has not yet been run and verified on a Windows machine.
 
-## What it does
+This GitHub Actions builder checks out a **clean fork** at `YOUR-USERNAME/Telegram-Drive`, upgrades the temporary build checkout to Tauri 2.12+, applies a storage and updater patch, and produces an **unbundled EXE** without an MSI/NSIS installer.
 
-The GitHub Actions workflow checks out your clean `Telegram-Drive` fork and inspects **public source code only**. It searches for Tauri data-path usage, Telegram sessions, OS credential storage, vaults, local databases, WebView state, updater behavior, and registry/startup code.
+The portable EXE is meant to keep application-managed files under `Data/AppState` and temporary files under `Data/Temp`, including when launched directly. An optional launcher, Startup-folder scripts, a read-only verifier, and a conservative copy-only migration tool are packaged with it.
 
-The workflow does **not** compile, run, or connect the app to Telegram; it does not read your PC, private settings, Telegram tokens, credentials, or Windows registry.
+## Important limitations
+
+* **Not fully portable:** Telegram API hash, proxy passwords, and supporter-license materials remain in Windows Credential Manager. These do **not** travel with the portable folder after reinstalling Windows.
+* No scripts export, modify, or bypass the original credential-store code, and the supporter activation rules remain intact.
+* The vault passphrase is not included or recoverable by this kit.
+* The **official in-app updater is disabled** so it cannot replace our custom EXE.
+* Runtime libraries such as WebView2 and VC++ may need to be installed on the host.
+* Windows and other apps can still leave independent system traces.
 
 ## Run
 
-**Actions → Inspect Telegram Drive for Portability → Run workflow**
+`Actions` → `Build Telegram Drive Portable (Phase 1)` → `Run workflow` → `filesystem-portable`.
 
-Keep the default source fields if your clean fork is named `YOUR-USERNAME/Telegram-Drive` on branch `main`.
+The workflow has no automatic schedule. First verify the manual build and its state on a test Windows installation; only then add this builder to your Universal Fork Sync mapping.
 
-Then download `TelegramDrive-Portability-Inspection-<commit>` under **Artifacts** and upload the ZIP to ChatGPT.
-
-## Repository roles
-
-- `Telegram-Drive` — clean fork of `caamer20/Telegram-Drive`, synchronized by your existing fork-sync controller.
-- `Telegram-Drive-Portable-Builder` — this custom tool repository.
-
-Do **not** add custom workflows to the force-synced fork. Do **not** change your working ZyntaxAI, GemType or YASB builder repositories or your Universal Fork Sync for this inspection.
-
-## Sensitive-data warning
-
-The app's own documentation treats API hashes, Telegram sessions, encryption credentials, REST/WebDAV keys and recovery material as secrets. Never upload real profile or AppData folders, session files, vault files or recovery material for this inspection.
-
-The final portable builder will only be designed once its storage/security source code has been verified. The current repository does not represent a working Telegram Drive portable EXE.
+Use the `inspect-source` mode if upstream changes and the patch fails.

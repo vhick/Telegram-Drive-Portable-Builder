@@ -1,0 +1,9 @@
+{
+  "app": {
+    "appDirectoriesOverride": "./Data/AppState"
+  },
+  "bundle": {
+    "active": false,
+    "createUpdaterArtifacts": false
+  }
+}
